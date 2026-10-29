@@ -1,298 +1,235 @@
-using Avalonia.Controls;
-using System;
-using System.Collections.Generic;
-using System.Collections.ObjectModel;
-using System.ComponentModel;
-using System.Globalization;
-using System.IO;
-using System.Linq;
-using System.Runtime.CompilerServices;
-using System.Text;
-using System.Text.RegularExpressions;
+    using System;
+    using System.Collections.Generic;
+    using System.Collections.ObjectModel;
+    using System.Globalization;
+    using System.IO;
+    using System.Linq;
+    using System.Security;
+    using System.Text;
+    using Avalonia.Controls;
 
-namespace notatnik;
+    namespace notatnik;
 
-public partial class MainWindow : Window
-{
-    private static readonly Regex NoteHeaderPattern = new(
-        @"^## (?<timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}) — (?<title>[^\n]*)$",
-        RegexOptions.Multiline | RegexOptions.CultureInvariant);
-    private static readonly string NotesFilePath = ResolveNotesFilePath();
-    private readonly ObservableCollection<Note> _notes = new();
-
-    public MainWindow()
+    public partial class MainWindow : Window
     {
-        InitializeComponent();
-        NotesList.ItemsSource = _notes;
-        LoadNotes();
-    }
+        private const string TimestampFormat = "yyyy-MM-dd HH:mm";
+        private static readonly UTF8Encoding Utf8WithoutBom = new(false, true);
 
-    private void LoadNotes()
-    {
-        try
+        private readonly ObservableCollection<NoteEntry> _notes = new();
+        private readonly string _notesFilePath;
+
+        public MainWindow()
         {
-            if (File.Exists(NotesFilePath))
+            InitializeComponent();
+
+            _notesFilePath = Path.Combine(FindProjectDirectory(), "notatki.md");
+            NotesList.ItemsSource = _notes;
+
+            try
             {
-                foreach (var note in ParseNotes(File.ReadAllText(NotesFilePath, Encoding.UTF8))
-                             .OrderByDescending(note => note.UpdatedAt))
+                foreach (var note in LoadNotes(_notesFilePath))
                 {
                     _notes.Add(note);
                 }
             }
-
-            UpdateNoteCount();
-        }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
-        {
-            StatusText.Text = $"Nie udało się wczytać notatek: {exception.Message}";
-            StatusText.Foreground = Avalonia.Media.Brushes.Firebrick;
-        }
-    }
-
-    private void SaveNote_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
-    {
-        var title = TitleInput.Text?.Trim();
-        var content = ContentInput.Text ?? string.Empty;
-        if (string.IsNullOrWhiteSpace(title))
-        {
-            StatusText.Text = "Wpisz tytuł notatki przed zapisaniem.";
-            StatusText.Foreground = Avalonia.Media.Brushes.Firebrick;
-            TitleInput.Focus();
-            return;
-        }
-
-        var selectedNote = NotesList.SelectedItem as Note;
-        var noteToSave = new Note
-        {
-            Title = title,
-            Content = content,
-            UpdatedAt = DateTimeOffset.Now
-        };
-        var notesToSave = _notes
-            .Where(note => !ReferenceEquals(note, selectedNote))
-            .Prepend(noteToSave)
-            .OrderByDescending(note => note.UpdatedAt)
-            .ToArray();
-
-        try
-        {
-            Directory.CreateDirectory(Path.GetDirectoryName(NotesFilePath)!);
-            File.WriteAllText(NotesFilePath, FormatNotes(notesToSave), new UTF8Encoding(false));
-        }
-        catch (Exception exception)
-        {
-            StatusText.Text = $"Nie udało się zapisać notatki: {exception.Message}";
-            StatusText.Foreground = Avalonia.Media.Brushes.Firebrick;
-            return;
+            catch (IOException ex)
+            {
+                ShowLoadError(ex.Message);
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                ShowLoadError(ex.Message);
+            }
+            catch (SecurityException ex)
+            {
+                ShowLoadError(ex.Message);
+            }
+            catch (InvalidDataException ex)
+            {
+                ShowLoadError(ex.Message);
+            }
+            catch (DecoderFallbackException ex)
+            {
+                ShowLoadError(ex.Message);
+            }
         }
 
-        if (selectedNote is null)
+        private void SaveButton_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
         {
-            selectedNote = noteToSave;
-            _notes.Add(selectedNote);
-        }
-        else
-        {
-            selectedNote.Title = noteToSave.Title;
-            selectedNote.Content = noteToSave.Content;
-            selectedNote.UpdatedAt = noteToSave.UpdatedAt;
+            var title = TitleTextBox.Text?.Trim() ?? string.Empty;
+            var content = ContentTextBox.Text ?? string.Empty;
+
+            if (string.IsNullOrWhiteSpace(title) || title.Contains('\n') || title.Contains('\r'))
+            {
+                StatusText.Text = "Podaj tytuł w jednej linii.";
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(content))
+            {
+                StatusText.Text = "Podaj treść notatki.";
+                return;
+            }
+
+            var note = new NoteEntry(DateTime.Now, title, NormalizeLineEndings(content));
+            var updatedNotes = _notes.ToList();
+            updatedNotes.Insert(0, note);
+
+            try
+            {
+                SaveNotes(_notesFilePath, updatedNotes);
+            }
+            catch (IOException ex)
+            {
+                ShowSaveError(ex.Message);
+                return;
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                ShowSaveError(ex.Message);
+                return;
+            }
+            catch (SecurityException ex)
+            {
+                ShowSaveError(ex.Message);
+                return;
+            }
+
+            _notes.Insert(0, note);
+            TitleTextBox.Text = string.Empty;
+            ContentTextBox.Text = string.Empty;
+            StatusText.Text = "Zapisano.";
         }
 
-        SortNotesNewestFirst();
-        NotesList.SelectedItem = selectedNote;
-        UpdateNoteCount();
-        PageTitleText.Text = "Edytuj notatkę";
-        StatusText.Text = "Notatka została zapisana.";
-        StatusText.Foreground = Avalonia.Media.Brushes.ForestGreen;
-    }
-
-    private static string ResolveNotesFilePath()
-    {
-        foreach (var startPath in new[] { Directory.GetCurrentDirectory(), AppContext.BaseDirectory })
+        private void ShowLoadError(string message)
         {
-            var directory = new DirectoryInfo(startPath);
+            SaveButton.IsEnabled = false;
+            StatusText.Text = $"Nie udało się odczytać notatek: {message}";
+        }
+
+        private void ShowSaveError(string message)
+        {
+            StatusText.Text = $"Nie udało się zapisać notatki: {message}";
+        }
+
+        private static string FindProjectDirectory()
+        {
+            var directory = new DirectoryInfo(AppContext.BaseDirectory);
             while (directory is not null)
             {
                 if (File.Exists(Path.Combine(directory.FullName, "notatnik.csproj")))
                 {
-                    return Path.Combine(directory.FullName, "notatki.md");
+                    return directory.FullName;
                 }
 
                 directory = directory.Parent;
             }
+
+            return AppContext.BaseDirectory;
         }
 
-        return Path.Combine(AppContext.BaseDirectory, "notatki.md");
-    }
-
-    private static Note[] ParseNotes(string text)
-    {
-        var normalizedText = text.Replace("\r\n", "\n").Replace('\r', '\n');
-        var headers = NoteHeaderPattern.Matches(normalizedText);
-        if (headers.Count == 0)
+        private static List<NoteEntry> LoadNotes(string path)
         {
-            if (!string.IsNullOrWhiteSpace(normalizedText))
+            if (!File.Exists(path))
             {
-                throw new InvalidDataException("Plik nie zawiera notatek w rozpoznawanym formacie.");
+                return new List<NoteEntry>();
             }
 
-            return Array.Empty<Note>();
-        }
+            var text = File.ReadAllText(path, Utf8WithoutBom);
+            var lines = NormalizeLineEndings(text).Split('\n');
+            var notes = new List<NoteEntry>();
+            var bodyLines = new List<string>();
+            DateTime createdAt = default;
+            string? title = null;
 
-        if (!string.IsNullOrWhiteSpace(normalizedText[..headers[0].Index]))
-        {
-            throw new InvalidDataException("Plik zawiera tekst przed pierwszą notatką.");
-        }
-
-        var notes = new Note[headers.Count];
-        for (var index = 0; index < headers.Count; index++)
-        {
-            var header = headers[index];
-            if (!DateTimeOffset.TryParseExact(
-                    header.Groups["timestamp"].Value,
-                    "yyyy-MM-dd HH:mm",
-                    CultureInfo.InvariantCulture,
-                    DateTimeStyles.AssumeLocal,
-                    out var updatedAt))
+            foreach (var line in lines)
             {
-                throw new InvalidDataException(
-                    $"Nieprawidłowa data notatki: {header.Groups["timestamp"].Value}.");
-            }
-
-            var contentStart = header.Index + header.Length;
-            if (contentStart < normalizedText.Length && normalizedText[contentStart] == '\n')
-            {
-                contentStart++;
-            }
-
-            var contentEnd = index + 1 < headers.Count
-                ? headers[index + 1].Index
-                : normalizedText.Length;
-
-            if (index + 1 < headers.Count)
-            {
-                if (contentEnd < 2 || normalizedText.Substring(contentEnd - 2, 2) != "\n\n")
+                if (TryParseHeader(line, out var parsedCreatedAt, out var parsedTitle))
                 {
-                    throw new InvalidDataException("Notatki muszą być oddzielone pustą linią.");
+                    AddCurrentNote(notes, createdAt, title, bodyLines);
+                    createdAt = parsedCreatedAt;
+                    title = parsedTitle;
+                    bodyLines.Clear();
                 }
-
-                contentEnd -= 2;
+                else if (title is null)
+                {
+                    if (!string.IsNullOrWhiteSpace(line))
+                    {
+                        throw new InvalidDataException("Plik notatek ma nieprawidłowy format.");
+                    }
+                }
+                else
+                {
+                    bodyLines.Add(line);
+                }
             }
 
-            if (contentEnd < contentStart)
+            AddCurrentNote(notes, createdAt, title, bodyLines);
+            if (!string.IsNullOrWhiteSpace(text) && notes.Count == 0)
             {
-                throw new InvalidDataException("Plik notatek ma nieprawidłowy format.");
+                throw new InvalidDataException("Plik notatek nie zawiera wpisów w obsługiwanym formacie.");
             }
 
-            notes[index] = new Note
-            {
-                Title = header.Groups["title"].Value,
-                Content = normalizedText[contentStart..contentEnd],
-                UpdatedAt = updatedAt
-            };
+            return notes.OrderByDescending(note => note.CreatedAt).ToList();
         }
 
-        return notes;
-    }
-
-    private static string FormatNotes(IEnumerable<Note> notes)
-    {
-        return string.Join(
-            "\n\n",
-            notes.Select(note =>
-                $"## {note.UpdatedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture)} — {note.Title.Replace("\r", " ").Replace("\n", " ")}\n{note.Content.Replace("\r\n", "\n").Replace('\r', '\n')}"));
-    }
-
-    private void SortNotesNewestFirst()
-    {
-        var sortedNotes = _notes.OrderByDescending(note => note.UpdatedAt).ToArray();
-        for (var index = 0; index < sortedNotes.Length; index++)
+        private static void AddCurrentNote(
+            ICollection<NoteEntry> notes,
+            DateTime createdAt,
+            string? title,
+            List<string> bodyLines)
         {
-            var currentIndex = _notes.IndexOf(sortedNotes[index]);
-            if (currentIndex != index)
+            if (title is null)
             {
-                _notes.Move(currentIndex, index);
+                return;
             }
+
+            var content = string.Join('\n', bodyLines).TrimEnd('\n');
+            notes.Add(new NoteEntry(createdAt, title, content));
         }
-    }
 
-    private void NewNote_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
-    {
-        NotesList.SelectedItem = null;
-        TitleInput.Text = string.Empty;
-        ContentInput.Text = string.Empty;
-        PageTitleText.Text = "Nowa notatka";
-        StatusText.Text = string.Empty;
-        TitleInput.Focus();
-    }
-
-    private void NotesList_SelectionChanged(object? sender, SelectionChangedEventArgs e)
-    {
-        if (NotesList.SelectedItem is not Note note)
+        private static bool TryParseHeader(string line, out DateTime createdAt, out string title)
         {
-            return;
+            createdAt = default;
+            title = string.Empty;
+
+            if (!line.StartsWith("## ", StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            var separatorIndex = line.IndexOf(" — ", 3, StringComparison.Ordinal);
+            if (separatorIndex < 0 ||
+                !DateTime.TryParseExact(
+                    line.Substring(3, separatorIndex - 3),
+                    TimestampFormat,
+                    CultureInfo.InvariantCulture,
+                    DateTimeStyles.None,
+                    out createdAt))
+            {
+                return false;
+            }
+
+            title = line.Substring(separatorIndex + 3);
+            return true;
         }
 
-        TitleInput.Text = note.Title;
-        ContentInput.Text = note.Content;
-        PageTitleText.Text = "Edytuj notatkę";
-        StatusText.Text = string.Empty;
-    }
-
-    private void UpdateNoteCount()
-    {
-        NoteCountText.Text = _notes.Count.ToString();
-    }
-}
-
-public sealed class Note : INotifyPropertyChanged
-{
-    private string _title = string.Empty;
-    private string _content = string.Empty;
-    private DateTimeOffset _updatedAt = DateTimeOffset.Now;
-
-    public event PropertyChangedEventHandler? PropertyChanged;
-
-    public string Title
-    {
-        get => _title;
-        set
+        private static void SaveNotes(string path, IEnumerable<NoteEntry> notes)
         {
-            _title = value;
-            OnPropertyChanged();
-        }
-    }
+            var serializedNotes = notes.Select(note =>
+                $"## {note.CreatedAt.ToString(TimestampFormat, CultureInfo.InvariantCulture)} — {note.Title}\n" +
+                NormalizeLineEndings(note.Content).TrimEnd('\n'));
+            var content = string.Join("\n\n", serializedNotes);
+            var temporaryPath = Path.Combine(
+                Path.GetDirectoryName(path)!,
+                $".{Path.GetFileName(path)}.{Guid.NewGuid():N}.tmp");
 
-    public string Content
-    {
-        get => _content;
-        set
+            File.WriteAllText(temporaryPath, content, Utf8WithoutBom);
+            File.Move(temporaryPath, path, true);
+        }
+
+        private static string NormalizeLineEndings(string value)
         {
-            _content = value;
-            OnPropertyChanged();
-            OnPropertyChanged(nameof(Preview));
+            return value.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
         }
     }
-
-    public DateTimeOffset UpdatedAt
-    {
-        get => _updatedAt;
-        set
-        {
-            _updatedAt = value;
-            OnPropertyChanged();
-            OnPropertyChanged(nameof(UpdatedAtLabel));
-        }
-    }
-
-    public string Preview => string.Join(
-        " ",
-        Content.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Take(14));
-
-    public string UpdatedAtLabel => $"Zmieniono: {UpdatedAt.ToLocalTime():dd.MM.yyyy, HH:mm}";
-
-    private void OnPropertyChanged([CallerMemberName] string? propertyName = null)
-    {
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
-    }
-}
