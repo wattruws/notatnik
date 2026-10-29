@@ -1,0 +1,67 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:local="using:notatnik"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d"
+        d:DesignWidth="760"
+        d:DesignHeight="700"
+        x:Class="notatnik.MainWindow"
+        Title="Notatnik"
+        Width="760"
+        Height="700"
+        MinWidth="520"
+        MinHeight="480">
+    <Grid Margin="24" RowDefinitions="Auto,Auto,Auto,Auto,Auto,*">
+        <TextBlock Text="Tytuł" FontWeight="SemiBold" />
+        <TextBox x:Name="TitleTextBox"
+                 Grid.Row="1"
+                 Margin="0,6,0,16"
+                 PlaceholderText="Tytuł notatki" />
+
+        <TextBlock Grid.Row="2" Text="Treść" FontWeight="SemiBold" />
+        <TextBox x:Name="ContentTextBox"
+                 Grid.Row="3"
+                 Margin="0,6,0,16"
+                 MinHeight="130"
+                 AcceptsReturn="True"
+                 TextWrapping="Wrap"
+                 VerticalContentAlignment="Top"
+                 PlaceholderText="Wpisz treść notatki" />
+
+        <StackPanel Grid.Row="4" Spacing="8">
+            <Button x:Name="SaveButton"
+                    HorizontalAlignment="Left"
+                    Padding="18,8"
+                    Click="SaveButton_OnClick"
+                    Content="Zapisz notatkę" />
+            <TextBlock x:Name="StatusText"
+                       MinHeight="20"
+                       TextWrapping="Wrap" />
+        </StackPanel>
+
+        <ListBox x:Name="NotesList" Grid.Row="5" Margin="0,12,0,0">
+            <ListBox.ItemTemplate>
+                <DataTemplate x:DataType="local:NoteEntry">
+                    <Border Margin="0,0,0,8"
+                            Padding="12"
+                            BorderBrush="{DynamicResource ThemeBorderLowBrush}"
+                            BorderThickness="1"
+                            CornerRadius="6">
+                        <StackPanel Spacing="4">
+                            <TextBlock Text="{Binding Title}"
+                                       FontSize="16"
+                                       FontWeight="SemiBold"
+                                       TextWrapping="Wrap" />
+                            <TextBlock Text="{Binding Timestamp}"
+                                       FontSize="12"
+                                       Opacity="0.7" />
+                            <TextBlock Text="{Binding Content}"
+                                       TextWrapping="Wrap" />
+                        </StackPanel>
+                    </Border>
+                </DataTemplate>
+            </ListBox.ItemTemplate>
+        </ListBox>
+    </Grid>
+</Window>
