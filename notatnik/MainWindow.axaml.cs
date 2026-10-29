@@ -62,32 +62,48 @@ public partial class MainWindow : Window
         }
 
         var selectedNote = NotesList.SelectedItem as Note;
-        if (selectedNote is null)
+        var noteToSave = new Note
         {
-            selectedNote = new Note();
-            _notes.Insert(0, selectedNote);
-        }
-
-        selectedNote.Title = title;
-        selectedNote.Content = content;
-        selectedNote.UpdatedAt = DateTimeOffset.Now;
-        SortNotesNewestFirst();
+            Title = title,
+            Content = content,
+            UpdatedAt = DateTimeOffset.Now
+        };
+        var notesToSave = _notes
+            .Where(note => !ReferenceEquals(note, selectedNote))
+            .Prepend(noteToSave)
+            .OrderByDescending(note => note.UpdatedAt)
+            .ToArray();
 
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(NotesFilePath)!);
-            File.WriteAllText(NotesFilePath, FormatNotes(_notes), new UTF8Encoding(false));
-            NotesList.SelectedItem = selectedNote;
-            UpdateNoteCount();
-            PageTitleText.Text = "Edytuj notatkę";
-            StatusText.Text = "Notatka została zapisana.";
-            StatusText.Foreground = Avalonia.Media.Brushes.ForestGreen;
+            File.WriteAllText(NotesFilePath, FormatNotes(notesToSave), new UTF8Encoding(false));
         }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        catch (Exception exception)
         {
             StatusText.Text = $"Nie udało się zapisać notatki: {exception.Message}";
             StatusText.Foreground = Avalonia.Media.Brushes.Firebrick;
+            return;
         }
+
+        if (selectedNote is null)
+        {
+            selectedNote = noteToSave;
+            _notes.Add(selectedNote);
+        }
+        else
+        {
+            selectedNote.Title = noteToSave.Title;
+            selectedNote.Content = noteToSave.Content;
+            selectedNote.UpdatedAt = noteToSave.UpdatedAt;
+        }
+
+        SortNotesNewestFirst();
+        NotesList.SelectedItem = selectedNote;
+        UpdateNoteCount();
+        PageTitleText.Text = "Edytuj notatkę";
+        StatusText.Text = "Notatka została zapisana.";
+        StatusText.Foreground = Avalonia.Media.Brushes.ForestGreen;
     }
 
     private static string ResolveNotesFilePath()
